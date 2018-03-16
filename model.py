@@ -1,6 +1,7 @@
 import os
 import pickle
 import numpy as np
+import pandas as pd
 
 from nltk.translate.bleu_score import corpus_bleu
 
@@ -280,9 +281,13 @@ def evaluate_model(model, smiles, photos, tokenizer, max_length):
         yhat = generate_smiles(model, tokenizer, photos[key], max_length)
         # store actual and predicted smiles
         actual.append([smi.split()])
-        predicted.append(yhat.split())
-    # calculate BLEU score
-    bleu = corpus_bleu(actual, predicted)
+        pred.append(yhat.split())
+        print('Actual: %s' % smi)
+        print('Predicted: %s' % yhat)
+        if len(actual) >=5:
+            break
+    # calculate BLEU score. Just using this right now, but maybe want to use accuracy since i want to aim for canonical smiles, not multiple ways to "translate" it right
+    bleu = corpus_bleu(actual, pred)
 
     return bleu
 
@@ -311,10 +316,10 @@ max_length = 20
 # define experiment
 model_name = 'baseline1'
 verbose = 2
-n_epochs = 50
+n_epochs = 10
 n_photos_per_update = 2
 n_batches_per_epoch = int(len(X_train)/ n_photos_per_update)
-n_repeats = 3
+n_repeats = 1
 
 # run experiment
 train_results, test_results = [], []
@@ -330,6 +335,13 @@ for i in range(n_repeats):
     train_results.append(train_score)
     test_results.append(test_score)
     print('>%d: train=%f test%f' %((i+1), train_score, test_score))
+
+# save results to file
+df = pd.DataFrame()
+df['train'] = train_results
+df['test'] = test_results
+print(df.describe())
+df.to_csv(model_name+'.csv', index = False)
 
 # ## Tests
 # mapping = load_image_smiles('data')
