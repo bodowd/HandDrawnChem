@@ -1,6 +1,8 @@
 import os
-
+import pickle
 import numpy as np
+
+from nltk.translate.bleu_score import corpus_bleu
 
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
@@ -94,6 +96,26 @@ def load_clean_smiles(mapping, dataset):
         # "!" is the startsequence and "$" is the endsequence
         cleaned_smiles[photo_id] = '!' + mapping[photo_id] + '$'
     return cleaned_smiles
+
+def load_image_features(pickled_file, cleaned_smiles):
+    """
+    Load pre-computed features for the photos that are in the dataset
+
+    Arguments:
+    ----------
+    pickled_file: the pre computed features. opened up will be a dict
+    cleaned_smiles: a set, not a dict
+
+    Returns:
+    --------
+    dict of {photo_id, features} for the selected images in the data sets
+    """
+    # load all features
+    all_features = pickle.load(open(pickled_file, 'rb'))
+    # select only features for the photos in the data sets
+    features = {k: all_features[k] for k in cleaned_smiles}
+    return features
+
 
 def create_tokenizer(cleaned_smiles):
     """
@@ -195,7 +217,7 @@ def data_generator(cleaned_smiles, img_features, tokenizer, max_length, n_step):
             for j in range(i, min(len(keys), i+n_step)):
                 photo_id = keys[j]
                 # retrieve the photo from the pickled extracted features dict
-                image = img_features[photo_id]
+                image = img_features[photo_id][0]
                 # retrieve the smiles corresponding to that image
                 smiles = cleaned_smiles[photo_id]
                 # generate input-output pairs
@@ -205,15 +227,115 @@ def data_generator(cleaned_smiles, img_features, tokenizer, max_length, n_step):
                     X_seq.append(in_seq[k])
                     y.append(out_smiles[k])
             # yield this batch of samples to the model
-            yield [[np.array(X_images), np.array(X_seq), np.array(y)]]
+            yield [[np.array(X_images), np.array(X_seq)], np.array(y)]
 
+def char_for_id(integer, tokenizer):
+    """
+    Map an integer to a character. Used in generate_smiles
 
+    """
+    for word, index in tokenizer.word_index.items():
+        if index == integer:
+            return word
+    return None
 
-## Tests
-mapping = load_image_smiles('data')
-X_train, X_test = train_test_split(mapping, 10, 10)
-cleaned_smiles = load_clean_smiles(mapping, X_train)
-tokenizer = create_tokenizer(cleaned_smiles)
-# print(create_sequences(tokenizer, cleaned_smiles['struct13_09'], 'struct13_09', max_length = 10))
-model = define_model(5,10)
-model.fit_generator(data_generator(train_smiles, train_features, tokenizer, max_length, n_photos_per_update), steps_per_epoch = n_batches_per_epoch, epochs = n_epochs, verbose = verbose)
+def generate_smiles(model, tokenizer, photo_id, max_length):
+    """
+    Generate a smiles for an image
+
+    """
+    # start the generation process with the start token "!"
+    in_text = '!'
+    # iterate over the whole length of the sequence
+    for i in range(max_length):
+        # integer encode input sequence
+        sequence = tokenizer.texts_to_sequences([in_text])[0]
+        # pad input
+        sequence = pad_sequences([sequence], maxlen = max_length)
+        # predict next char
+        yhat = model.predict([photo_id, sequence], verbose = 0)
+        # convert probability to integer
+        yhat = np.argmax(yhat)
+        # map integer to word
+        char = char_for_id(yhat, tokenizer)
+        # stop if we cannot map the word
+        if char is None:
+            break
+        # append as input for generating the next word
+        in_text += ' ' + char
+        # stop if end of sequence is predicted, '$'
+        if char == '$':
+            break
+    return in_text
+
+def evaluate_model(model, smiles, photos, tokenizer, max_length):
+    """
+    Evaluate the model with BLEU score
+
+    """
+    actual, pred = [], []
+    # step over the whole set
+    for key, smi in smiles.items():
+        # generate smiles
+        yhat = generate_smiles(model, tokenizer, photos[key], max_length)
+        # store actual and predicted smiles
+        actual.append([smi.split()])
+        predicted.append(yhat.split())
+    # calculate BLEU score
+    bleu = corpus_bleu(actual, predicted)
+
+    return bleu
+
+#####################################################
+# load dataset
+directory = 'data'
+mapping = load_image_smiles(directory)
+
+X_train, X_test = train_test_split(mapping, 100, 100)
+# process smiles
+train_smiles = load_clean_smiles(mapping, X_train)
+test_smiles = load_clean_smiles(mapping, X_test)
+print('SMILES loaded: train=%d, test=%d' % (len(train_smiles), len(test_smiles)))
+# photo features
+train_features = load_image_features('features.pkl', X_train)
+test_features = load_image_features('features.pkl', X_test)
+print('Photos loaded: train=%d, test=%d' % (len(train_features), len(test_features)))
+# prepare tokenizer
+tokenizer = create_tokenizer(train_smiles)
+vocab_size = len(tokenizer.word_index) + 1
+print('Vocab size: %d' % vocab_size)
+print('Vocab: ', tokenizer.word_counts)
+# just set a max seq length for this run
+max_length = 20
+
+# define experiment
+model_name = 'baseline1'
+verbose = 2
+n_epochs = 50
+n_photos_per_update = 2
+n_batches_per_epoch = int(len(X_train)/ n_photos_per_update)
+n_repeats = 3
+
+# run experiment
+train_results, test_results = [], []
+for i in range(n_repeats):
+    # define model
+    model = define_model(vocab_size, max_length)
+    # fit model
+    model.fit_generator(data_generator(train_smiles, train_features, tokenizer, max_length, n_photos_per_update), steps_per_epoch=n_batches_per_epoch, epochs = n_epochs, verbose = verbose)
+    # evaluate model on training data
+    train_score = evaluate_model(model, train_smiles, train_features, tokenizer, max_length)
+    test_score = evaluate_model(model, test_smiles, test_features, tokenizer, max_length)
+
+    train_results.append(train_score)
+    test_results.append(test_score)
+    print('>%d: train=%f test%f' %((i+1), train_score, test_score))
+
+# ## Tests
+# mapping = load_image_smiles('data')
+# X_train, X_test = train_test_split(mapping, 10, 10)
+# cleaned_smiles = load_clean_smiles(mapping, X_train)
+# tokenizer = create_tokenizer(cleaned_smiles)
+# # print(create_sequences(tokenizer, cleaned_smiles['struct13_09'], 'struct13_09', max_length = 10))
+# model = define_model(5,10)
+# model.fit_generator(data_generator(train_smiles, train_features, tokenizer, max_length, n_photos_per_update), steps_per_epoch = n_batches_per_epoch, epochs = n_epochs, verbose = verbose)
