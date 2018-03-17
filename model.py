@@ -269,29 +269,34 @@ def generate_smiles(model, tokenizer, photo_id, max_length):
             break
     return in_text
 
-def evaluate_model(model, smiles, photos, tokenizer, max_length):
+def evaluate_model(model, smiles, img_features, tokenizer, max_length):
     """
     Evaluate the model with BLEU score
 
     """
-    actual, pred = [], []
+    # actual, pred = [], []
+    pred_dict = {}
     # step over the whole set
     for key, smi in smiles.items():
         # generate smiles
-        yhat = generate_smiles(model, tokenizer, photos[key], max_length)
+        yhat = generate_smiles(model, tokenizer, img_features[key], max_length)
         # store actual and predicted smiles
-        actual.append([smi.split()])
-        pred.append(yhat.split())
+        # actual.append(smi)
+        # pred.append(yhat)
+        print('photo_id: ', key)
         print('Actual: %s' % smi)
         print('Predicted: %s' % yhat)
-        if len(actual) >=5:
-            break
+        pred_dict[key] = [smi,yhat]
+        # if len(actual) >=5:
+            # break
     # calculate BLEU score. Just using this right now, but maybe want to use accuracy since i want to aim for canonical smiles, not multiple ways to "translate" it right
-    bleu = corpus_bleu(actual, pred)
+    # bleu = corpus_bleu(actual, pred)
 
-    return bleu
+    return pred_dict
 
 #####################################################
+# Run all
+
 # load dataset
 directory = 'data'
 mapping = load_image_smiles(directory)
@@ -316,32 +321,29 @@ max_length = 20
 # define experiment
 model_name = 'baseline1'
 verbose = 2
-n_epochs = 10
+n_epochs = 22
 n_photos_per_update = 2
 n_batches_per_epoch = int(len(X_train)/ n_photos_per_update)
 n_repeats = 1
 
 # run experiment
-train_results, test_results = [], []
 for i in range(n_repeats):
     # define model
     model = define_model(vocab_size, max_length)
     # fit model
     model.fit_generator(data_generator(train_smiles, train_features, tokenizer, max_length, n_photos_per_update), steps_per_epoch=n_batches_per_epoch, epochs = n_epochs, verbose = verbose)
     # evaluate model on training data
-    train_score = evaluate_model(model, train_smiles, train_features, tokenizer, max_length)
-    test_score = evaluate_model(model, test_smiles, test_features, tokenizer, max_length)
-
-    train_results.append(train_score)
-    test_results.append(test_score)
-    print('>%d: train=%f test%f' %((i+1), train_score, test_score))
+    train_dict = evaluate_model(model, train_smiles, train_features, tokenizer, max_length)
+    test_dict = evaluate_model(model, test_smiles, test_features, tokenizer, max_length)
 
 # save results to file
 df = pd.DataFrame()
-df['train'] = train_results
-df['test'] = test_results
-print(df.describe())
+df['photo_id'] = train_dict.keys()
+df['train'] = train_dict.values()
+# df['test'] = test_dict.values()
+# print(df.describe())
 df.to_csv(model_name+'.csv', index = False)
+
 
 # ## Tests
 # mapping = load_image_smiles('data')
