@@ -1,9 +1,38 @@
+"""
+file directory should be like:
+data/
+    molecule1/
+            image_1_1.png
+            image_1_2.png
+            ...
+    molecule2/
+            image_2_1.png
+            image_2_2.png
+            ...
+    ...
+
+After getting the basic model working, make
+data/
+    train/
+        molecule1/
+        ...
+    validation/
+        molecule3/
+        ...
+
+Using activations without the top softmax layer of VGG16 learns
+Tried using activations from block4_pool but it seems the model is not learning
+
+
+"""
+
 import os
 import pickle
 import numpy as np
 import pandas as pd
+from difflib import SequenceMatcher
 
-from nltk.translate.bleu_score import corpus_bleu
+from nltk.metrics import edit_distance
 
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
@@ -180,15 +209,23 @@ def define_model(vocab_size, max_length):
     # feature extractor (encoder)
     # features from VGG16 model will be of shape (7,7,512)
     inputs1 = Input(shape=(7,7,512))
+
+    # using activations from intermediate layer will have shape ((14,14,512))
+    # inputs1 = Input(shape=(14,14,512))
+
+    # ultimately bring photo features shape down to (max_length,128) so that it can merged at "merged"
+    # GlobalMaxPooling outputs 2D tensor with shape (batch_size, channels) so (None, 512)
     fe1 = GlobalMaxPooling2D()(inputs1)
-    fe2 = Dense(128, activation='relu')(fe1)
+    # Dense will output (None, 128)
+    fe2 = Dense(64, activation='relu')(fe1)
+    # Repeat Vector will output (max_length,128)
     fe3 = RepeatVector(max_length)(fe2)
-    # embedding
+    # smiles embedding layer outputs (25,128)
     inputs2 = Input(shape=(max_length,))
     emb2 = Embedding(vocab_size, 50, mask_zero = True)(inputs2)
     emb3 = LSTM(256, return_sequences=True)(emb2)
     emb4 = TimeDistributed(Dense(128, activation = 'relu'))(emb3)
-    # merge inputs
+    # merge inputs takes the (25,128) inputs from fe3 and emb4
     merged = concatenate([fe3, emb4])
     # language model
     lm2 = LSTM(500)(merged)
@@ -240,6 +277,7 @@ def char_for_id(integer, tokenizer):
             return word
     return None
 
+
 def generate_smiles(model, tokenizer, photo_id, max_length):
     """
     Generate a smiles for an image
@@ -269,26 +307,21 @@ def generate_smiles(model, tokenizer, photo_id, max_length):
             break
     return in_text
 
+def similar(y_true, y_hat):
+    return SequenceMatcher(None, y_true, y_hat).ratio()
+
 def evaluate_model(model, smiles, img_features, tokenizer, max_length):
     """
     Evaluate the model with BLEU score
 
     """
-    # actual, pred = [], []
     pred_dict = {}
     # step over the whole set
     for key, smi in smiles.items():
         # generate smiles
-        yhat = generate_smiles(model, tokenizer, img_features[key], max_length)
-        # store actual and predicted smiles
-        # actual.append(smi)
-        # pred.append(yhat)
-        print('photo_id: ', key)
-        print('Actual: %s' % smi)
-        print('Predicted: %s' % yhat)
-        pred_dict[key] = [smi,yhat]
-        # if len(actual) >=5:
-            # break
+        yhat = generate_smiles(model, tokenizer, img_features[key], max_length).replace(" ","")
+        # edit_distance: get levenshtein distance - minimum number of single-character edits (insertions, deletions or substitutions) required to change one word into the other
+        pred_dict[key] = [smi,yhat,edit_distance(smi, yhat), similar(smi, yhat)]
     # calculate BLEU score. Just using this right now, but maybe want to use accuracy since i want to aim for canonical smiles, not multiple ways to "translate" it right
     # bleu = corpus_bleu(actual, pred)
 
@@ -296,9 +329,10 @@ def evaluate_model(model, smiles, img_features, tokenizer, max_length):
 
 #####################################################
 # Run all
-
 # load dataset
 directory = 'data'
+pickled_features = 'features.pkl'
+
 mapping = load_image_smiles(directory)
 
 X_train, X_test = train_test_split(mapping, 100, 100)
@@ -307,8 +341,8 @@ train_smiles = load_clean_smiles(mapping, X_train)
 test_smiles = load_clean_smiles(mapping, X_test)
 print('SMILES loaded: train=%d, test=%d' % (len(train_smiles), len(test_smiles)))
 # photo features
-train_features = load_image_features('features.pkl', X_train)
-test_features = load_image_features('features.pkl', X_test)
+train_features = load_image_features(pickled_features, X_train)
+test_features = load_image_features(pickled_features, X_test)
 print('Photos loaded: train=%d, test=%d' % (len(train_features), len(test_features)))
 # prepare tokenizer
 tokenizer = create_tokenizer(train_smiles)
@@ -316,12 +350,12 @@ vocab_size = len(tokenizer.word_index) + 1
 print('Vocab size: %d' % vocab_size)
 print('Vocab: ', tokenizer.word_counts)
 # just set a max seq length for this run
-max_length = 20
+max_length = 30
 
 # define experiment
-model_name = 'baseline1'
+model_name = 'size_64_fixed_vec'
 verbose = 2
-n_epochs = 22
+n_epochs = 3
 n_photos_per_update = 2
 n_batches_per_epoch = int(len(X_train)/ n_photos_per_update)
 n_repeats = 1
@@ -342,7 +376,11 @@ df['photo_id'] = train_dict.keys()
 df['train'] = train_dict.values()
 # df['test'] = test_dict.values()
 # print(df.describe())
-df.to_csv(model_name+'.csv', index = False)
+df.to_csv(model_name+'_train'+'.csv', index = False)
+df = pd.DataFrame()
+df['photo_id'] = test_dict.keys()
+df['test'] = test_dict.values()
+df.to_csv(model_name+'_test'+'.csv', index = False)
 
 
 # ## Tests
