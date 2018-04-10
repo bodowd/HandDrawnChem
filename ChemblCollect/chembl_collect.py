@@ -1,3 +1,8 @@
+"""
+Script to access molecules from CHEMBL via their API
+
+"""
+
 import os
 from chembl_webresource_client.new_client import new_client
 
