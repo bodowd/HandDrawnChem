@@ -2,11 +2,10 @@
 Script to access molecules from CHEMBL via their API
 
 """
-
 import os
 from chembl_webresource_client.new_client import new_client
 
-
+# code from CHEMBL documentation
 drug_indication = new_client.drug_indication
 molecules = new_client.molecule
 
@@ -15,7 +14,9 @@ lung_cancer_ind = drug_indication.filter(efo_term__icontains="LUNG CARCINOMA")
 lung_cancer_mols = molecules.filter(
     molecule_chembl_id__in=[x['molecule_chembl_id'] for x in lung_cancer_ind]
 )
+######## end CHEMBL code
 
+# begin code to make data files
 for mol in range(len(lung_cancer_mols)):
     # only get molecules that contain a valid smiles (for example cisplatin does not have one but it is listed as a drug for lung cancer)
     try:
@@ -41,5 +42,6 @@ for mol in range(len(lung_cancer_mols)):
 
         print('Finished {}'.format(name))
 
+    # if the molecule doesn't have a canonical smiles field
     except TypeError:
         pass
